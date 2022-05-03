@@ -1,0 +1,153 @@
+---
+title: "Posterior Predict"
+author: "Alex Dombowsky"
+date: '2022-04-25'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(dplyr)
+library(abind)
+library(grid)
+library(gridExtra)
+```
+
+
+# Load Data
+```{r}
+seymour <- read.csv("data/seymour_cd4.csv")
+```
+
+## Delete non-continuous variables
+```{r}
+seymour <- seymour %>% select(-gcs, -Age, -Sex, -Neut)
+narows <- apply(seymour, 1, function(x) sum(is.na(x)))
+bad <- which(narows>2)
+seymour <- seymour[-bad, ]
+```
+
+## Get priors
+```{r}
+priors <- readRDS("priors/new_priors.Rdata")
+priors_0 <- readRDS("priors/priors.Rdata")
+# add CD4%
+priors<- abind(priors, matrix(rep(c(32, 10, 2, 50), 4), byrow = T, nrow = 4, ncol = 4), along = 3)
+priors_0 <- abind(priors_0, matrix(rep(c(32, 10, 2, 50), 3), byrow = T, nrow = 3, ncol = 4), along = 3)
+```
+
+
+In which I draw a bunch of predictive samples. Fortunately, we can use the missing data function.
+```{r}
+source("rfuncts/LCM_Gibbs.R")
+fit0 <- readRDS("fits/fit0.Rdata")
+```
+
+Can sample using a simple for-loop.
+```{r}
+R <- (R - burnin) * n_chains
+B <- 0
+stop_ind <- 500
+stops <- (1:(R/stop_ind)) * stop_ind
+n <- nrow(seymour)
+p <- ncol(seymour)
+pps <- array(0, dim = c(R-B, n, p))
+theta <- fit0$theta
+s <- fit0$s
+for (r in 1:R){
+  for (i in 1:n){
+    for (j in 1:p) {
+      pps[r, i, j] <- sample.y_ij(theta_j = theta[[j]][, ,r], type = "c", s_i = s[r, i])
+    }
+  }
+      # print stops
+  if (r %in% stops){
+    print(r)
+  }
+}
+saveRDS(pps, "fits/posterior_predictive.Rdata")
+pps <- readRDS("fits/posterior_predictive.Rdata")
+
+```
+
+# Idea 1: Distributions in Each Cluster
+
+## test out on just hemoglobin
+```{r}
+y <- seymour
+K <- 3
+y$cluster <- factor(s0.minbinder$cl, levels = 1:K)
+plots <- list()
+for (h in 1:K) {
+  test = y %>% select(hgb, cluster) %>% filter(cluster == h) %>% select(-cluster)
+  plots[[h]] <- ggplot(test, aes(x = hgb)) + geom_histogram(color = "blue", fill = "skyblue1") +
+  labs(title = toString(h)) + xlim(4,22)
+}
+grid.arrange(plots[[1]], plots[[2]],
+             plots[[3]],
+             nrow = 2, ncol = 2)
+
+```
+
+## write function
+```{r}
+cluster_summarize <- function(data, clustering, K, names) {
+  p <- ncol(data)
+  colnames(data) <- names
+  data$cluster <- factor(clustering, levels = 1:K)
+  plots <- list()
+  for (j in 1:p){
+    test = data %>% select(names[j], cluster)
+    colnames(test) = c("var", "cluster")
+    plot <- test %>% ggplot(aes(x = var, color = cluster, fill = cluster)) + geom_density(alpha = 0.5) + labs(title = names[j]) + xlab("Variable") +
+      theme(text = element_text(size = 13)) + theme_bw()
+    print(plot)
+    #for (h in 1:K) {
+      #test = y %>% select(names[j], cluster) %>% filter(cluster == h) %>% select(-cluster)
+      #colnames(test) = "var"
+      #plots[[h]] <- ggplot(test, aes(x = var)) + geom_density(color = "blue", fill = "skyblue1") +
+       #xlim(min(data[,j], na.rm = T), max(data[,j], na.rm = T)) + 
+        #labs(title = paste0("h=",toString(h)))
+    #}
+    #grid.arrange(plots[[1]], plots[[2]],
+             #plots[[3]], plots[[4]],
+             #nrow = 2, ncol = 2,
+             #top = textGrob(names[j],gp=gpar(fontsize=20,font=3)))
+  }
+}
+
+```
+
+## implement function
+```{r, warning = F}
+names <- c("Hemoglobin", "Platelet Count", "Pulse Rate", "Blood Pressure",
+           "Lactate", "Respiratory Rate", "Oxygen Saturation", "Temperature",
+           "White Blood Cell Count", "CD4 Percent")
+cluster_summarize(data = seymour, clustering = s0.minbinder$cl, K = 3, names = names)
+```
+# now, do function with posterior predictive samples
+```{r}
+# can look at how vars are separated at each Gibbs iteration
+r = 100
+cluster_summarize(data = as.data.frame(pps[r,,]), clustering = s[r,], K = 4,
+                  names = names)
+
+
+```
+# Prior Predictive vs. Posterior Predictive
+```{r}
+# sample from prior predictive
+source("rfuncts/prior_predictive.R")
+pri.pred <- prior_predict(n = nrow(seymour), p = ncol(seymour), alpha = rep(1/3,3),
+                          priors = priors_0, names = colnames(seymour))
+y_prior <- pri.pred$y
+s_prior <- pri.pred$s
+
+# plot using above function
+cluster_summarize(data = y_prior, clustering = s_prior, K = 4,
+                  names = names)
+```
+
+
+

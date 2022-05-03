@@ -1,0 +1,627 @@
+---
+title: "LCM Seymour Fit"
+author: "Alex Dombowsky"
+date: '2022-04-14'
+output: html_document
+---
+
+`
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(dplyr)
+library(grid)
+library(gridExtra)
+library(kableExtra)
+library(mcclust.ext)
+library(abind)
+library(reshape)
+library(label.switching)
+```
+
+# Load Data
+```{r}
+seymour <- read.csv("data/seymour_cd4.csv")
+```
+
+## Delete non-continuous variables
+```{r}
+seymour <- seymour %>% select(-gcs, -Age, -Sex, -Neut)
+narows <- apply(seymour, 1, function(x) sum(is.na(x)))
+bad <- which(narows>2)
+seymour <- seymour[-bad, ]
+```
+
+## Get priors
+```{r}
+priors <- readRDS("priors/new_priors.Rdata")
+priors_0 <- readRDS("priors/priors.Rdata")
+# add CD4%
+priors <- abind(priors, matrix(rep(c(32, 10, 2, 50), 4), byrow = T, nrow = 4, ncol = 4), along = 3)
+priors_0 <- abind(priors_0, matrix(rep(c(32, 10, 2, 50), 3), byrow = T, nrow = 3, ncol = 4), along = 3)
+```
+
+# fitting with 3 clusters
+```{r}
+source("rfuncts/LCM_Gibbs.R")
+# parameters
+n_chains <- 5
+R <- 50000/n_chains
+y <- as.matrix(seymour)
+p <- ncol(y)
+type <- rep("c", p)
+K <- 3
+alpha <- rep(1/K, K)
+stops <- 500
+# fitting
+chains <- list()
+for (l in 1:n_chains){
+  chains[[l]] <- inf_LCM_gibbs(R = R, y = y, type = type, K = K, 
+                     priors = priors_0, alpha = alpha,
+                     stops = stops)
+  print(paste("chain", l, "finished!"))
+}
+
+
+# combining into one list
+theta <- list()
+r_s <- list()
+r_eta <- list()
+r_y_array <- list()
+burnin <- 2000
+# first combine the thetas
+for (j in 1:p){
+  theta[[j]] <- abind(chains[[1]]$theta[[j]][,,-(1:burnin)],
+                      chains[[2]]$theta[[j]][,,-(1:burnin)],
+                      chains[[3]]$theta[[j]][,,-(1:burnin)],
+                      chains[[4]]$theta[[j]][,,-(1:burnin)],
+                      chains[[5]]$theta[[j]][,,-(1:burnin)],
+                      along = 3)
+}
+# now combine everything else
+for (l in 1:n_chains) {
+  r_s[[l]] <- chains[[l]]$s[-(1:burnin), ]
+  r_eta[[l]] <- chains[[l]]$eta[-(1:burnin), ]
+  r_y_array[[l]] <- chains[[l]]$y_array[-(1:burnin),,]
+}
+s <- abind(r_s, along = 1)
+eta <- abind(r_eta, along = 1)
+y_array <- array(0, dim = c((R-burnin) * n_chains, n, p))
+# have to manually do y_array for some reason
+for (l in 1:n_chains){
+  y_array[((l-1) * (R - burnin) + 1): (l * (R-burnin )),,] <- r_y_array[[l]]
+}
+
+# return a final fit
+fit0 <- list(s = s,
+             theta = theta,
+             eta = eta,
+             y_array = y_array)
+#fit0 <- readRDS("fits/fit0.Rdata")
+# get clustering
+s0.samps <- fit0$s
+s0.psm <- comp.psm(cls = s0.samps)
+s0.minbinder <- minbinder(psm = s0.psm,
+                cls.draw = s0.samps,
+                max.k = 3)
+saveRDS(fit0, "fits/fit0.Rdata")
+```
+
+# fitting with 4 cluster
+```{r}
+source("rfuncts/LCM_Gibbs.R")
+# parameters
+n_chains <- 5
+R <- 50000/n_chains
+y <- as.matrix(seymour)
+p <- ncol(y)
+type <- rep("c", p)
+K <- 4
+alpha <- rep(1/K, K)
+stops <- 500
+# fitting
+chains <- list()
+for (l in 1:n_chains){
+  chains[[l]] <- inf_LCM_gibbs(R = R, y = y, type = type, K = K, 
+                     priors = priors, alpha = alpha,
+                     stops = stops)
+  print(paste("chain", l, "finished!"))
+}
+
+
+# combining into one list
+theta <- list()
+r_s <- list()
+r_eta <- list()
+r_y_array <- list()
+burnin <- 2000
+# first combine the thetas
+for (j in 1:p){
+  theta[[j]] <- abind(chains[[1]]$theta[[j]][,,-(1:burnin)],
+                      chains[[2]]$theta[[j]][,,-(1:burnin)],
+                      chains[[3]]$theta[[j]][,,-(1:burnin)],
+                      chains[[4]]$theta[[j]][,,-(1:burnin)],
+                      chains[[5]]$theta[[j]][,,-(1:burnin)],
+                      along = 3)
+}
+# now combine everything else
+for (l in 1:n_chains) {
+  r_s[[l]] <- chains[[l]]$s[-(1:burnin), ]
+  r_eta[[l]] <- chains[[l]]$eta[-(1:burnin), ]
+  r_y_array[[l]] <- chains[[l]]$y_array[-(1:burnin),,]
+}
+s <- abind(r_s, along = 1)
+eta <- abind(r_eta, along = 1)
+y_array <- array(0, dim = c((R-burnin) * n_chains, n, p))
+# have to manually do y_array for some reason
+for (l in 1:n_chains){
+  y_array[((l-1) * (R - burnin) + 1): (l * (R-burnin )),,] <- r_y_array[[l]]
+}
+
+# return a final fit
+fit1 <- list(s = s,
+             theta = theta,
+             eta = eta,
+             y_array = y_array)
+
+# get clustering
+s1.samps <- fit1$s
+s1.psm <- comp.psm(cls = s1.samps)
+s1.minbinder <- minbinder(psm = s1.psm,
+                cls.draw = s1.samps,
+                max.k = 4)
+saveRDS(fit1, "fits/fit1.Rdata")
+#fit1 <- readRDS("fits/fit1.Rdata")
+```
+
+## Display WAIC
+```{r}
+source("rfuncts/waic.R")
+B <- 0 # burn-in
+waic1 <- cont_LCM_WAIC(fit = fit1, burnin = B, K = 4)
+waic0 <- cont_LCM_WAIC(fit = fit0, burnin = B, K = 3)
+waic1
+waic0
+```
+
+* as of May 2: Waic1 = 41.62079, Waic0 = 41.77786
+* suggests both models are about equivalent in terms of waic
+
+# Analysis
+
+## Diagnosis
+```{r}
+# plots file
+source("rfuncts/mcmc_functs.R")
+```
+
+## display traceplots
+```{r, warning=F}
+fit = fit0
+K <- 3
+name <- colnames(y)
+theta <- fit$theta
+for (j in 1:p){
+  tps <- trace_loop(theta.samps = theta, j = j, type_j = type[j], K = K, B = 1)
+grid.arrange(tps[[1]], tps[[2]], tps[[3]],
+             ncol = 2,
+             top = textGrob(name[j],gp=gpar(fontsize=20,font=3)))
+}
+```
+
+## s0 Summary Statistics
+```{r}
+# creeatind df
+seymour_0 <- seymour %>% as.matrix() %>% scale() %>% as.data.frame()
+seymour_0$cluster <- s0.minbinder$cl
+mean_0 <- matrix(0, nrow = 3, ncol = p+1)
+sd_0 <- matrix(0, nrow = 3, ncol = p+1)
+
+# means and sd
+for (h in 1:3){
+  mean_0[h, ] = seymour_0 %>% filter(cluster == h) %>% colMeans(na.rm = T)
+  sd_0[h, ] = seymour_0 %>% filter(cluster == h) %>% apply(2, sd, na.rm = T)
+}
+colnames(mean_0) = colnames(seymour_0)
+mean_0 <- as.data.frame(mean_0)
+melt_0 <- melt(mean_0, id.vars = "cluster")
+melt_0$cluster <- recode(melt_0$cluster,
+                         "1" = "alpha",
+                         "2" = "gamma",
+                         "3" = "delta")
+melt_0$cluster <- factor(melt_0$cluster, levels = c("alpha", "gamma", "delta"))
+
+# cluster means plot
+melt_0 %>% ggplot(aes(x = variable, y = value, 
+                      group = factor(cluster), color = factor(cluster),
+                      shape = factor(cluster))) + geom_point(size = 3) + geom_line() +
+  labs(title = "Within Cluster Averages (After Scaling Data)",
+       color = "Cluster", shape = "Cluster") +
+  theme_bw() +
+  theme(text = element_text(size = 20),
+        axis.text.x = element_text(angle = 90))
+  
+
+```
+
+## s1 Summary Statistics
+```{r}
+# creating df
+seymour_1 <- seymour %>% as.matrix() %>% scale() %>% as.data.frame()
+seymour_1$cluster <- s1.minbinder$cl
+mean_1 <- matrix(0, nrow = 4, ncol = p+1)
+sd_1 <- matrix(0, nrow = 4, ncol = p+1)
+
+# means and sds
+for (h in 1:4){
+  mean_1[h, ] = seymour_1 %>% filter(cluster == h) %>% colMeans(na.rm = T)
+  sd_1[h, ] = seymour_1 %>% filter(cluster == h) %>% apply(2, sd, na.rm = T)
+}
+colnames(mean_1) = colnames(seymour_1)
+mean_1 <- as.data.frame(mean_1)
+melt_1 <- melt(mean_1, id.vars = "cluster")
+melt_1$cluster <- recode(melt_1$cluster,
+                         "1" = "alpha",
+                         "2" = "delta",
+                         "3" = "gamma",
+                         "4" = "lambda")
+melt_1$cluster <- factor(melt_1$cluster, levels = c("alpha", "gamma", "delta", "lambda"))
+
+# plotting means within clusters
+melt_1 %>% ggplot(aes(x = variable, y = value, 
+                      group = factor(cluster), color = factor(cluster),
+                      shape = factor(cluster))) +
+  geom_point(size = 3) + geom_line() + labs(title = "Within Cluster Averages (After Scaling Data)", color = "Cluster", shape = "Cluster") +
+  theme_bw() +
+  theme(text = element_text(size = 15),
+        axis.text.x = element_text(angle = 90))
+
+```
+
+## Age and Sex Breakdown
+
+```{r}
+# get data and add hiv class
+seymour_uncut <- read.csv("data/seymour_cd4.csv")
+seymour_uncut$hiv <- crf$hiv_class # see  clean_xlsxfiles
+seymour_uncut <- seymour_uncut %>% select(-gcs, -Neut)
+narows <- apply(seymour_uncut, 1, function(x) sum(is.na(x)))
+bad <- which(narows>2)
+seymour_uncut <- seymour_uncut[-bad, ]
+seymour_uncut$cluster <- s0.minbinder$cl
+
+# sex
+seymour_uncut %>% select(Sex, cluster) %>% group_by(cluster) %>% mutate(Sex = mean(Sex)) %>%
+  unique()
+
+# HIV
+seymour_uncut %>% select(hiv, cluster) %>% group_by(cluster) %>% mutate(hiv = mean(hiv)) %>%
+  unique()
+
+# Age mean
+seymour_uncut %>% select(Age, cluster) %>% group_by(cluster) %>% mutate(Age = mean(Age)) %>%
+  unique()
+
+# Age sd
+seymour_uncut %>% select(Age, cluster) %>% group_by(cluster) %>% mutate(Age = sd(Age)) %>%
+  unique()
+```
+
+## Allocation Probabilities
+```{r}
+# compute allocation probabiltiies
+allocation_probabilities <- function(y_i, eta, priors, K, comb_theta, p){
+  sigma2 <- comb_theta[, seq(2, 2*p, by = 2)]
+  probs <- rep(0,K)
+  for (h in 1:K){
+    zeta <- priors[h,1,]
+    lambda <- priors[h, 2,]
+    probs[h] <- prod(dnorm(x = y_i, 
+                          mean = zeta, 
+                          sd = sqrt(sigma2[h,]*(1 + 1/lambda)))) * eta[h]
+  }
+  probs <- unlist(probs)
+  probs <- probs/sum(probs)
+  return(probs)
+}
+
+# do to every iteration
+K = 4
+B <- R-10000
+n <- nrow(seymour)
+a_probs <- array(0, dim = c(R, n, K))
+theta <- fit1$theta
+eta <- fit1$eta
+ymiss <- fit1$y_array
+for (r in 1:(R - B)){
+  a_probs[r, , ] <- t(apply(ymiss[r+B, , ], 1, allocation_probabilities, eta = eta[r+B, ],
+                          priors = priors, K = K, p = 10,
+                          comb_theta = abind(theta, along = 2)[,,r+B]))
+                        
+}
+# apply mean
+a_mean <- apply(a_probs[1:(R-B),,], c(2,3), mean)
+
+# weight plot function
+weight_plot <- function(a_mean, K){
+  # here eta is a data frame of weights, with colnames corresponding to each observation
+  m_eta <- melt(eta)
+  m_eta$class <- factor(rep(1:K, ncol(eta)))
+  colnames(m_eta) <- c("Observation", "PAP", "Cluster")
+  m_eta$Observation <- factor(m_eta$Observation)
+  m_eta$Cluster <- recode(m_eta$Cluster,
+                         "1" = "alpha",
+                         "2" = "gamma",
+                         "3" = "delta",
+                         "4" = "lambda")
+  m_eta$Cluster <- factor(m_eta$Cluster, levels = c("alpha", "gamma", "delta", "lambda"))
+  pl <- ggplot(data = m_eta, aes(x = PAP, 
+                               y = Observation, fill = Cluster)) + geom_bar(stat = "identity") +
+    labs(title = "Posterior Allocation Probabilities")
+  return(pl)
+  
+}
+
+# create weight plot
+eta <- t(a_mean[order(a_mean[,1], decreasing = T), ])
+colnames(eta) <- paste0("x", 1:ncol(eta))
+eta <- as.data.frame(eta)
+weight_plot(eta, K = 3) + scale_x_reverse()  + theme_bw() +
+ theme(text = element_text(size = 17),
+       axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+
+```
+
+## Display Clusters (s1)
+```{r}
+pca <- prcomp(na.omit(seymour), center = TRUE, scale = TRUE)
+pcs <- pca$x
+y = seymour
+na_matrix <- is.na(y)
+na_logical = apply(na_matrix, 1, function(x) sum(x) > 0)
+pcadf <- data.frame(PC1 = pcs[,1],
+                    PC2 = pcs[,2],
+                    cluster = factor(s1.minbinder$cl)[!na_logical])
+pcadf$cluster <- recode(pcadf$cluster,
+                         "1" = "alpha",
+                         "2" = "delta",
+                         "3" = "gamma",
+                         "4" = "lambda")
+pcadf$cluster <- factor(pcadf$cluster, levels = c("alpha", "gamma", "delta", "lambda"))
+
+# plot 1: first 2 PCs of the data (for comparison)
+pcadf %>%
+  ggplot(aes(x = PC1, y = PC2)) + geom_point(size = 2) + 
+  labs(title = "First 2 Principal Components") +
+  theme_bw() +
+  theme(text = element_text(size = 20)) 
+
+# plot 2: first 2 PCs with clusters colored
+pcadf %>%
+  ggplot(aes(x = PC1, y = PC2, color = cluster, shape = cluster)) + geom_point(size = 3) + 
+  labs(title = "4 Clusters Visualized With Principal Components",
+       color = "Cluster", shape = "Cluster") +
+  theme_bw() +
+  theme(text = element_text(size = 20))
+
+# plot 3: compare to k_means
+y_complete <- scale(na.omit(seymour))
+pca_y <- prcomp(y_complete)
+pcs_y <- pca_y$x
+km_y <- kmeans(y_complete, centers = 3)
+pcaydf <- data.frame(PC1 = pcs_y[,1], PC2 = pcs_y[,2], cluster = factor(km_y$cluster))
+pcaydf %>%
+  ggplot(aes(x = PC1, y = PC2, color = cluster, shape = cluster)) + geom_point(size = 3) + 
+  labs(title = "K-Means with 3 Clusters and First 2 PCs",
+       color = "Cluster", shape = "Cluster") +
+  theme_bw() +
+  theme(text = element_text(size = 20))
+library(mclust)
+
+# adjusted rand index
+adjustedRandIndex(x = km_y$cluster, y =  factor(s1.minbinder$cl)[!na_logical])
+```
+
+## Display Clusters (s0)
+```{r}
+# prepping data frame
+pca <- prcomp(na.omit(seymour), center = TRUE, scale = TRUE)
+pcs <- pca$x
+y = seymour
+na_matrix <- is.na(y)
+na_logical = apply(na_matrix, 1, function(x) sum(x) > 0)
+pcadf <- data.frame(PC1 = pcs[,1],
+                    PC2 = pcs[,2],
+                    cluster = factor(s0.minbinder$cl)[!na_logical])
+pcadf$cluster <- recode(pcadf$cluster,
+                         "1" = "alpha",
+                         "2" = "gamma",
+                         "3" = "delta")
+pcadf$cluster <- factor(pcadf$cluster, levels = c("alpha", "gamma", "delta"))
+
+# plot 1: PCA with colored clusters
+pcadf %>%
+  ggplot(aes(x = PC1, y = PC2, color = cluster, shape = cluster)) + geom_point(size = 3) + 
+  labs(title = "3 Clusters Visualized With Principal Components",
+       color = "Cluster", shape = "Cluster") +
+  theme_bw() +
+  theme(text = element_text(size = 20))
+
+# plot 2: compare to k_means
+y_complete <- scale(na.omit(seymour))
+pca_y <- prcomp(y_complete)
+pcs_y <- pca_y$x
+km_y <- kmeans(y_complete, centers = 3)
+pcaydf <- data.frame(PC1 = pcs_y[,1], PC2 = pcs_y[,2], cluster = factor(km_y$cluster))
+pcaydf %>%
+  ggplot(aes(x = PC1, y = PC2, color = cluster, shape = cluster)) + geom_point(size = 3) + 
+  labs(title = "K-Means with 3 Clusters and First 2 PCs",
+       color = "Cluster", shape = "Cluster") +
+  theme_bw() +
+  theme(text = element_text(size = 20))
+library(mclust)
+
+# adjusted rand index
+adjustedRandIndex(x = km_y$cluster, y =  factor(s1.minbinder$cl)[!na_logical])
+```
+
+## compare to kMeans
+### 3 clusters
+```{r}
+# first, complete data set
+ymiss <- fit0$y_array
+burnin = 0
+yhat <- apply(ymiss[-(1:burnin), , ], c(2,3), mean)
+# next, fit it with K-means
+khat <- kmeans(scale(yhat), centers = 3)
+pcahat <- prcomp(scale(yhat))
+pcshat <- pcahat$x
+pcadf <- data.frame(PC1 = pcshat[,1], PC2 = pcshat[,2],
+                   cluster = factor(s0.minbinder$cl),
+                   kmeans = factor(khat$cluster))
+# recoding and reordering
+pcadf$cluster <- recode(pcdaf$cluster,
+                         "1" = "alpha",
+                         "2" = "delta",
+                         "3" = "gamma")
+pcadf$cluster <- factor(pcadf$cluster, levels = c("alpha", "gamma", "delta"))
+
+# plot 1: first 2 PCs with colors
+pcadf %>%
+  ggplot(aes(x = PC1, y = PC2, color = cluster, shape = cluster)) + geom_point(size = 3) +
+  labs(title = "4 Clusters Visualized With Principal Components",
+       color = "Cluster", shape = "Cluster") +
+  theme_bw() +
+  theme(text = element_text(size = 20))
+
+# plot 2: first 2 PCs with k-means
+pcadf %>%
+  ggplot(aes(x = PC1, y = PC2, color = kmeans, shape = kmeans)) + geom_point(size = 3) +
+  labs(title = "K-Means with 3 Clusters and First 2 PCs",
+       color = "K-Means Cluster", shape = "K-Means Cluster") +
+  theme_bw() +
+  theme(text = element_text(size = 20))
+
+
+library(mclust)
+adjustedRandIndex(khat$cluster, s0.minbinder$cl)
+```
+
+# get log-likelihood samples
+```{r}
+# preliminaries
+T <- (R-burnin) * n_chains
+fit = fit1
+theta <- fit$theta
+eta <- fit$eta
+y_miss <- fit$y_array
+K <- ncol(eta)
+theta <- lapply(theta, aperm, perm = c(3, 1, 2))
+theta <- abind(theta, along = 3)
+
+# configure stops
+stop_ind <- 500
+stops <- (1:(T/stop_ind)) * stop_ind
+
+# run a loop
+source("rfuncts/log_likelihood.R")
+LL <- c()
+for (r in 1:T){
+  theta_r <- theta[r, , ]
+  eta_r <- eta[r, ]
+  y_r <- y_miss[r, , ]
+  q <- ncol(theta_r)
+  mu_r <- theta_r[, -seq(2, q, by = 2)]
+  sigma2_r <- theta_r[, seq(2, q, by = 2)]
+  LL[r] <- log_lik(y = y_r, mu = mu_r, sigma2 = sigma2_r, eta = eta_r)
+        # print stops
+  if (r %in% stops){
+    print(r)
+  }
+}
+
+# load
+LL0 <- readRDS("fits/LL0.Rdata") # mixes alright
+LL1 <- readRDS("fits/LL1.Rdata") # mixes not so well
+
+# make traceplot
+# lag 1
+plot(LL)
+
+# lag 5
+plot(LL[seq(1, length(LL), by = 100)])
+
+```
+
+## label switching
+```{r}
+make_mcmc <- function(fit, p, K, R){
+  theta <- fit$theta
+  Theta <- abind(theta, along = 2)
+  mu <- sigma2 <- matrix(0, nrow = R, ncol = p)
+  # create mu and sigma matricies
+  for (r in 1:R) {
+    mu[r, ] = t(Theta[,,r][, -seq(2, ncol(Theta), by = 2)])
+    sigma2[r, ]= t(Theta[,,r][, seq(2, ncol(Theta), by = 2)])
+  }
+  mu_r <- theta_r[, -seq(2, ncol(Theta), by = 2)]
+  sigma2_r <- theta_r[, seq(2, ncol(Theta), by = 2)]
+  eta <- fit$eta
+  mcmc <- array(0, dim = c(R, K, 3))
+  mcmc[,,1] <- Theta[, seq(1, ncol(Theta), by = 2), ]
+  mcmc[,,2] <- t(Theta[, -seq(1, ncol(Theta), by = 2), ])
+  mcmc[,,3] <- eta
+  return(mcmc)
+}
+
+
+label.switching(method = "ECR", , K = 3)
+```
+
+
+## Posteriors
+
+### Histogram Loop Function
+```{r}
+source("rfuncts/mcmc_functs.R")
+name <- colnames(y)
+theta <- fit$theta
+for (j in 1:p){
+  hists <- hist_loop(theta.samps = theta, j = j, 
+                     type_j = type[j], K = K, B = 1)
+  
+  grid.arrange(hists[[1]], hists[[2]], hists[[3]],
+             ncol = 1, 
+             top = textGrob(name[j],gp=gpar(fontsize=20,font=3)))
+}
+
+
+```
+
+# summarize pure types
+```{r}
+extract_post_mean <- function(theta.samps, l, p, type, K, B) {
+  post_means <- matrix(0, ncol = K, nrow = p)
+  for (j in 1:p) {
+    samps <- theta.samps[[j]]
+    if (type[j] == "c") {
+      if (l == 1){
+        var <- samps[, l, -(1:B)]
+      }
+      else {
+        var <- sqrt(samps[, l, -(1:B)])
+      }
+      post_means[j, ] <- rowMeans(var)
+    }
+    else {
+      var <- samps[-(1:B), ]
+      post_means[j, ] <- colMeans(var)
+    }
+  }
+  return(post_means)
+}
+```
+
